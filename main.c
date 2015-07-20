@@ -7,21 +7,24 @@
 #define BAUDRATE ((F_CPU)/(BAUD*16UL)-1)
 
 char pattern[] = {
-	0b00000001,
-	0b00000011,
-	0b00000010,
-	0b00000110,
-	0b00000100,
-	0b00001100,
-	0b00001000,
-	0b00001001,
+	0b00010001,
+	0b00110011,
+	0b00100010,
+	0b01100110,
+	0b01000100,
+	0b11001100,
+	0b10001000,
+	0b10011001,
 };
 
 char buffer[32];				// We will store data received via serial port here
 uint8_t buffer_position = 0;
 
-int16_t motor1 = 0;
-uint8_t motor1_offset = 0;
+volatile int16_t motor1 = 0;
+volatile uint8_t motor1_offset = 0;
+
+volatile int16_t motor2 = 0;
+volatile uint8_t motor2_offset = 0;
 
 void uart_init (void) {
 	UBRRH = (BAUDRATE>>8);			// shift the register right by 8 bits
@@ -32,7 +35,7 @@ void uart_init (void) {
 }
 
 void io_init (void) {
-	DDRB = 0x0F;				// make all pins on PORTB output
+	DDRB = 0xFF;				// make all pins on PORTB output
 }
 
 void timer_init(void) {
@@ -61,22 +64,41 @@ void msg_ln(char* str) {
 	msg("\r\n");
 }
 
-void process_cmd() {
-	if (buffer[0] == 'm' && buffer[1] == ' ') {
+void process_cmd(void) {
+	if ( buffer[0] == 's' ) {	// Stepper
 		int16_t val = 0;
-		char *p = buffer+1;
+		char *p = buffer+2;
 
 		while (! (*p == '\0' || *p == '-' || (*p >= '0' && *p <= '9')) ) {
 			p ++;
 		}
 
 		val = atoi(p);
-		motor1 += val;
 
-		msg_ln("Motor1");
-	} else {
-		msg_ln("Unknown command");
+		if (buffer[1] != '2') {
+			motor1 += val;
+			msg_ln("Stepper1");
+		}
+
+		if (buffer[1] != '1') {
+			motor2 += val;
+			msg_ln("Stepper2");
+		}
+
+		return;
 	}
+
+	if ( buffer[0] =='r' ) {	// Reset
+		if (buffer[1] != '2') {
+			motor1 = 0;
+		}
+
+		if (buffer[1] != '1') {
+			motor2 = 0;
+		}
+	}
+
+	msg_ln("Unknown command");
 }
 
 int main() {
@@ -99,7 +121,7 @@ ISR(USART_RX_vect) {
 	char in;
 	in = UDR;
 
-	if (in == '\r') {
+	if (in == '\r' || in == '\n') {
 		msg_ln("");
 
 		buffer[ buffer_position ] = '\0';
@@ -127,7 +149,7 @@ ISR(USART_RX_vect) {
 // at ~1 kHz so We set timer to ~1 ms and only make
 // steps in the interrupt.
 ISR(TIMER0_COMPA_vect) {
-	if (motor1) {
+	if (motor1 || motor2) {
 		if (motor1 > 1) {
 			motor1 --;
 			motor1_offset --;
@@ -136,8 +158,18 @@ ISR(TIMER0_COMPA_vect) {
 			motor1_offset ++;
 		}
 
+		if (motor2 > 1) {
+			motor2 --;
+			motor2_offset --;
+		} else if (motor2 < -1) {
+			motor2 ++;
+			motor2_offset ++;
+		}
+
 		motor1_offset &= 0x07;
-		PORTB = pattern[ motor1_offset ];
+		motor2_offset &= 0x07;
+
+		PORTB = (pattern[motor1_offset] & 0xF0) | (pattern[motor2_offset] & 0x0F);
 	} else {
 		PORTB = 0;
 	}
