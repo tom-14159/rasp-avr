@@ -36,12 +36,13 @@ void uart_init (void) {
 
 void io_init (void) {
 	DDRB = 0xFF;				// make all pins on PORTB output
+	DDRD = 0x7C;
 }
 
 void timer_init(void) {
 	TCCR0A |= (1<<WGM01);			// CTC (Reset after interrupt)
 	TCCR0B |= (1<<CS02);			// Prescaler=clock/256
-	OCR0A = 0x0A;				// Interrupt after 10 ticks ~ 1 ms @ 2.4576 MHz
+	OCR0A = 0x10;				// Interrupt after 10 ticks ~ 1 ms @ 2.4576 MHz
 	TCNT0 = 0;				// Initialize timer0
 	TIMSK |= (1<<OCIE0A);			// Enable interrupt on compare
 }
@@ -96,6 +97,82 @@ void process_cmd(void) {
 		if (buffer[1] != '1') {
 			motor2 = 0;
 		}
+
+		return;
+	}
+
+	if ( buffer[0] == 'l' ) {	// LED
+		if ( buffer[1] == '+' ) {
+			PORTD |= (1<<PIND6);
+			msg_ln("LED on");
+		} else {
+			PORTD &= ~(1<<PIND6);
+			msg_ln("LED off");
+		}
+
+		return;
+	}
+
+	if (buffer[0] == 'm') {		// DC Motor
+		uint8_t current_portd = PORTD;
+		if (buffer[1] == '1') {
+			switch (buffer[2]) {
+				case '+':
+					current_portd |= (1<<PIND2);
+					current_portd &= ~(1<<PIND3);
+					PORTD = current_portd;
+					break;
+				case '-':
+					current_portd |= (1<<PIND3);
+					current_portd &= ~(1<<PIND2);
+					PORTD = current_portd;
+					break;
+				default:
+					PORTD &= ~( (1<<PIND2)|(1<<PIND3) );
+			}
+
+			msg_ln("DC Motor 1 set");
+		} else if (buffer[1] == '2') {
+			switch (buffer[2]) {
+				case '+':
+					current_portd |= (1<<PIND4);
+					current_portd &= ~(1<<PIND5);
+					PORTD = current_portd;
+					break;
+				case '-':
+					current_portd |= (1<<PIND5);
+					current_portd &= ~(1<<PIND4);
+					PORTD = current_portd;
+					break;
+				default:
+					PORTD &= ~( (1<<PIND4)|(1<<PIND5) );
+			}
+
+			msg_ln("DC Motor 2 set");
+		} else {	// Both motors
+			switch (buffer[1]) {
+				case '+':
+					current_portd |= (1<<PIND2);
+					current_portd &= ~(1<<PIND3);
+					current_portd |= (1<<PIND4);
+					current_portd &= ~(1<<PIND5);
+					PORTD = current_portd;
+					break;
+				case '-':
+					current_portd |= (1<<PIND3);
+					current_portd &= ~(1<<PIND2);
+					current_portd |= (1<<PIND5);
+					current_portd &= ~(1<<PIND4);
+					PORTD = current_portd;
+					break;
+				default:
+					PORTD &= ~( (1<<PIND2)|(1<<PIND3)|(1<<PIND4)|(1<<PIND5) );
+			}
+
+			msg_ln("DC Motors set");
+		}
+
+		return;
 	}
 
 	msg_ln("Unknown command");
@@ -170,8 +247,6 @@ ISR(TIMER0_COMPA_vect) {
 		motor2_offset &= 0x07;
 
 		PORTB = (pattern[motor1_offset] & 0xF0) | (pattern[motor2_offset] & 0x0F);
-	} else {
-		PORTB = 0;
 	}
 }
 
