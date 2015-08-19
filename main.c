@@ -26,6 +26,12 @@ volatile uint8_t motor1_offset = 0;
 volatile int16_t motor2 = 0;
 volatile uint8_t motor2_offset = 0;
 
+volatile int8_t soft_pwm_tick = 0;
+volatile int8_t dc1_direction = 0;
+volatile int8_t dc2_direction = 0;
+
+volatile uint8_t led;
+
 void uart_init (void) {
 	UBRRH = (BAUDRATE>>8);			// shift the register right by 8 bits
 	UBRRL = BAUDRATE;			// set baud rate
@@ -44,7 +50,12 @@ void timer_init(void) {
 	TCCR0B |= (1<<CS02);			// Prescaler=clock/256
 	OCR0A = 0x10;				// Interrupt after 10 ticks ~ 1 ms @ 2.4576 MHz
 	TCNT0 = 0;				// Initialize timer0
-	TIMSK |= (1<<OCIE0A);			// Enable interrupt on compare
+
+	TCCR1B |= (1<<CS10)|(1<<WGM12);		// No prescaler, CTC
+	OCR1A = 0xC8;				// 200 ticks
+	TCNT1 = 0;				// Initialize timer0
+	
+	TIMSK |= (1<<OCIE0A)|(1<<OCIE1A);	// Enable interrupt on compare
 }
 
 void uart_transmit (char data) {
@@ -66,7 +77,8 @@ void msg_ln(char* str) {
 }
 
 void process_cmd(void) {
-	if ( buffer[0] == 's' ) {	// Stepper
+	// Stepper
+	if ( buffer[0] == 's' ) {
 		int16_t val = 0;
 		char *p = buffer+2;
 
@@ -78,18 +90,17 @@ void process_cmd(void) {
 
 		if (buffer[1] != '2') {
 			motor1 += val;
-			msg_ln("Stepper1");
 		}
 
 		if (buffer[1] != '1') {
 			motor2 += val;
-			msg_ln("Stepper2");
 		}
 
 		return;
 	}
 
-	if ( buffer[0] =='r' ) {	// Reset
+	// Reset stepper motors
+	if ( buffer[0] =='r' ) {
 		if (buffer[1] != '2') {
 			motor1 = 0;
 		}
@@ -101,75 +112,37 @@ void process_cmd(void) {
 		return;
 	}
 
-	if ( buffer[0] == 'l' ) {	// LED
+	// LED
+	if ( buffer[0] == 'l' ) {
 		if ( buffer[1] == '+' ) {
-			PORTD |= (1<<PIND6);
-			msg_ln("LED on");
+			led = 1;
 		} else {
-			PORTD &= ~(1<<PIND6);
-			msg_ln("LED off");
+			led = 0;
 		}
 
 		return;
 	}
 
-	if (buffer[0] == 'm') {		// DC Motor
-		uint8_t current_portd = PORTD;
-		if (buffer[1] == '1') {
-			switch (buffer[2]) {
-				case '+':
-					current_portd |= (1<<PIND2);
-					current_portd &= ~(1<<PIND3);
-					PORTD = current_portd;
-					break;
-				case '-':
-					current_portd |= (1<<PIND3);
-					current_portd &= ~(1<<PIND2);
-					PORTD = current_portd;
-					break;
-				default:
-					PORTD &= ~( (1<<PIND2)|(1<<PIND3) );
-			}
+	// DC Motors
+	if (buffer[0] == 'm') {
+		char motor_number = buffer[1];
+		int8_t val = 0;
+		char *p = buffer+2;
 
-			msg_ln("DC Motor 1 set");
-		} else if (buffer[1] == '2') {
-			switch (buffer[2]) {
-				case '+':
-					current_portd |= (1<<PIND4);
-					current_portd &= ~(1<<PIND5);
-					PORTD = current_portd;
-					break;
-				case '-':
-					current_portd |= (1<<PIND5);
-					current_portd &= ~(1<<PIND4);
-					PORTD = current_portd;
-					break;
-				default:
-					PORTD &= ~( (1<<PIND4)|(1<<PIND5) );
-			}
+		while (! (*p == '\0' || *p == '-' || (*p >= '0' && *p <= '9')) ) {
+			p ++;
+		}
 
-			msg_ln("DC Motor 2 set");
-		} else {	// Both motors
-			switch (buffer[1]) {
-				case '+':
-					current_portd |= (1<<PIND2);
-					current_portd &= ~(1<<PIND3);
-					current_portd |= (1<<PIND4);
-					current_portd &= ~(1<<PIND5);
-					PORTD = current_portd;
-					break;
-				case '-':
-					current_portd |= (1<<PIND3);
-					current_portd &= ~(1<<PIND2);
-					current_portd |= (1<<PIND5);
-					current_portd &= ~(1<<PIND4);
-					PORTD = current_portd;
-					break;
-				default:
-					PORTD &= ~( (1<<PIND2)|(1<<PIND3)|(1<<PIND4)|(1<<PIND5) );
-			}
+		if (motor_number != '\0') {
+			val = atoi(p);
+		}
 
-			msg_ln("DC Motors set");
+		if (motor_number != '2') {
+			dc1_direction = val;
+		}
+
+		if (motor_number != '1') {
+			dc2_direction = val;
 		}
 
 		return;
@@ -248,5 +221,43 @@ ISR(TIMER0_COMPA_vect) {
 
 		PORTB = (pattern[motor1_offset] & 0xF0) | (pattern[motor2_offset] & 0x0F);
 	}
+}
+
+ISR(TIMER1_COMPA_vect) {
+	soft_pwm_tick ++;
+	if (soft_pwm_tick >= 8) {
+		soft_pwm_tick = 0;
+	}
+
+	uint8_t new_portd=0;
+	if (dc1_direction < 0) {
+		if (4-dc1_direction > soft_pwm_tick) {
+			new_portd |= (1<<PIND2);
+		}
+	}
+
+	if (dc1_direction > 0) {
+		if (4+dc1_direction > soft_pwm_tick) {
+			new_portd |= (1<<PIND3);
+		}
+	}
+
+	if (dc2_direction < 0) {
+		if (4-dc2_direction > soft_pwm_tick) {
+			new_portd |= (1<<PIND4);
+		}
+	}
+
+	if (dc2_direction > 0) {
+		if (4+dc2_direction > soft_pwm_tick) {
+			new_portd |= (1<<PIND5);
+		}
+	}
+
+	if (led) {
+		new_portd |= (1<<PIND6);
+	}
+
+	PORTD = new_portd;
 }
 
